@@ -1,0 +1,330 @@
+---
+title: "trait_analysis"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(performance)
+library(glmmTMB)
+library(gtsummary)
+library(gt)
+library(patchwork)
+```
+
+```{r}
+### Trait based analysis ### 
+
+# load trait data
+load("Data/species_traits.rda")
+
+locality_type <- tibble(location = c("Adelaide", "Victor Harbour", "Port Augusta", "Port Lincoln", "Strathalbyn", "Nuriootpa", "Clare", "Tumby Bay"), locality_type = c("City", "City", "City", "City", "Town", "Town", "Town", "Town"))
+
+dat <- read_csv("Data/Road_Transect_data.csv")
+
+dat_traits <- dat %>% 
+  select(location_route, prefered_name, survey_ID, transect_ID, transect_repeat, season) %>%
+  mutate(location_route = case_match(
+      location_route,
+      "North Adelaide" ~ "Adelaide",
+      "South Adelaide" ~ "Adelaide",
+      .default = location_route
+    )) %>% 
+  rename(species = prefered_name,
+         location = location_route) %>% 
+  left_join(traits_clean, by = "species") %>% 
+  left_join(locality_type, by = "location")
+
+dat_traits_city <- dat_traits %>% 
+  select(-location) %>% 
+  dplyr::filter(locality_type == "City") %>% 
+  distinct()
+
+dat_traits_town <- dat_traits %>%
+  select(-location) %>% 
+  dplyr::filter(locality_type == "Town") %>% 
+  distinct()
+
+# For zone analysis
+load("Data/city_zone_richness.rda")
+load("Data/town_zone_richness.rda")
+
+traits_zone_city <- city_zone_df %>%
+  mutate(dist = case_when(
+      dist == "3000" ~ "Urban",
+      dist == "8000" ~ "Peri-urban",
+      dist == "20000" ~ "Rural")) %>% 
+  rename(species = prefered_name,
+         location = Location) %>% 
+  left_join(dat_traits_city, by = c("species", "survey_ID"))
+
+traits_zone_town <- town_zone_df %>%
+  mutate(dist = case_when(
+      dist == "2000" ~ "Urban",
+      dist == "5000" ~ "Peri-urban",
+      dist == "20000" ~ "Rural")) %>% 
+  rename(species = prefered_name,
+         location = Location) %>% 
+  left_join(dat_traits_town, by = c("species", "survey_ID"))
+
+dat_traits <- bind_rows(traits_zone_city, traits_zone_town) %>% 
+  arrange(survey_ID)
+
+load("Data/species_richness_data_mod.rda")
+load("Data/species_diversity_data_mod.rda")
+
+# tidy dataframe for modelling
+mod_df <- dat_traits %>% 
+  left_join(spec_rich_df, by = c("location", "locality_type")) %>% 
+  left_join(shandiv_df, by = c("location", "locality_type")) %>% 
+  mutate(dist = fct_relevel(dist, "Urban", "Peri-urban", "Rural"))
+
+mod_df
+
+#save(mod_df, file = "Data/Trait_data_mod.rda")
+```
+
+```{r}
+# Modelling
+load("Data/Trait_data_mod.rda")
+### locality type ###
+
+mod_df <- mod_df |> 
+  rename(Zone = dist)
+
+# diet breadth
+mod_db_lt<- glmmTMB(diet_breadth ~ locality_type + (1 | transect_ID), family = poisson, data = mod_df)
+
+summary(mod_db_lt)
+
+#model assumptions
+check_model(mod_db_lt)
+
+#Data might be underdispersed. Check for this
+check_overdispersion(mod_db_lt)
+
+#No underdispersion  
+
+# model summary table
+mod_db_lt_tbl <- tbl_regression(mod_db_lt, intercept = TRUE) |>
+  bold_p() |> 
+  modify_column_unhide(columns = c(statistic, std.error)) |> 
+  modify_header(label = "**Trait**", estimate = "**Estimate**") %>% 
+   modify_table_body(~.x  %>% 
+      mutate(groupname_col = "Diet Breadth")) 
+
+mod_db_lt_tbl
+
+#habitat breadth
+mod_hb_lt<- glmmTMB(habitat_breadth ~ locality_type + (1 | transect_ID), family = poisson, data = mod_df)
+
+summary(mod_hb_lt)
+
+#model assumptions
+check_model(mod_hb_lt)
+
+#Data might be underdispersed. Check for this
+check_overdispersion(mod_hb_lt)
+
+#No underdispersion
+
+mod_hb_lt_tbl <- tbl_regression(mod_hb_lt, intercept = TRUE) |>
+  bold_p() |> 
+  modify_column_unhide(columns = c(statistic, std.error)) |> 
+  modify_header(label = "**Trait**", estimate = "**Estimate**") %>% 
+   modify_table_body(~.x  %>% 
+      mutate(groupname_col = "Habitat Breadth")) 
+
+mod_hb_lt_tbl
+
+# body mass
+
+#Need to log transform here
+mod_bm_lt<- glmmTMB(log(Body_mass) ~ locality_type + (1 | transect_ID), data = mod_df)
+
+summary(mod_bm_lt)
+
+check_model(mod_bm_lt)
+
+# All good!
+
+mod_bm_lt_tbl <- tbl_regression(mod_bm_lt, intercept = TRUE) |>
+  bold_p() |> 
+  modify_column_unhide(columns = c(statistic, std.error)) |> 
+  modify_header(label = "**Trait**", estimate = "**Estimate**") %>% 
+   modify_table_body(~.x  %>% 
+      mutate(groupname_col = "Body Mass")) 
+
+mod_bm_lt_tbl
+
+
+### zone ###
+# diet breadth
+mod_db_z<- glmmTMB(diet_breadth ~ Zone + (1 | transect_ID), family = poisson, data = mod_df)
+
+summary(mod_db_z)
+
+#check model assumptions
+check_model(mod_db_z)
+
+#Data might be underdispersed. Check for this
+check_overdispersion(mod_db_z)
+
+#No underdispersion
+
+mod_db_z_tbl <- tbl_regression(mod_db_z, intercept = TRUE) |>
+  bold_p() |> 
+  modify_column_unhide(columns = c(statistic, std.error)) |> 
+  modify_header(label = "**Trait**", estimate = "**Estimate**") %>% 
+   modify_table_body(~.x  %>% 
+      mutate(groupname_col = "Diet Breadth"))
+
+mod_db_z_tbl
+
+# habitat breadth
+mod_hb_z<- glmmTMB(habitat_breadth ~ Zone + (1 | transect_ID), family = poisson, data = mod_df)
+
+summary(mod_hb_z)
+
+#check model assumptions
+check_model(mod_hb_z)
+
+#Data might be underdispersed. Check for this
+check_overdispersion(mod_hb_z)
+
+#No underdispersion
+
+mod_hb_z_tbl <- tbl_regression(mod_hb_z, intercept = TRUE) |>
+  bold_p() |> 
+  modify_column_unhide(columns = c(statistic, std.error)) |> 
+  modify_header(label = "**Trait**", estimate = "**Estimate**") %>% 
+   modify_table_body(~.x  %>% 
+      mutate(groupname_col = "Habitat Breadth"))
+
+mod_hb_z_tbl
+
+# body mass
+
+# Need to log transform here
+mod_bm_z<- glmmTMB(log(Body_mass) ~ Zone + (1 | transect_ID), data = mod_df)
+
+summary(mod_bm_z)
+
+#check model assumptions
+check_model(mod_bm_z)
+
+mod_bm_z
+
+mod_bm_z_tbl <- tbl_regression(mod_bm_z, intercept = TRUE) |>
+  bold_p() |> 
+  modify_column_unhide(columns = c(statistic, std.error)) |> 
+  modify_header(label = "**Trait**", estimate = "**Estimate**") %>% 
+   modify_table_body(~.x  %>% 
+      mutate(groupname_col = "Body Mass")) 
+
+mod_bm_z_tbl
+
+# publication ready plots
+
+# locality type
+
+plot_db_lt <- ggplot(data =mod_df, aes(x = locality_type, y = diet_breadth, fill = locality_type)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_manual(values = c("#CC6677", "#117733"),
+                    limits = c("City", "Town"),
+                    guide = guide_legend(title = "Locality type")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(x = "Locality Type",
+       y = "Diet Breadth")
+
+plot_db_lt
+
+plot_hb_lt <- ggplot(data =mod_df, aes(x = locality_type, y = habitat_breadth, fill = locality_type)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_manual(values = c("#CC6677", "#117733"),
+                    limits = c("City", "Town"),
+                    guide = guide_legend(title = "Locality type")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(x = "Locality Type",
+       y = "Habitat Breadth")
+
+plot_hb_lt
+
+plot_bm_lt <- ggplot(data =mod_df, aes(x = locality_type, y = Body_mass, fill = locality_type)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_manual(values = c("#CC6677", "#117733"),
+                    limits = c("City", "Town"),
+                    guide = guide_legend(title = "Locality type")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(x = "Locality Type",
+       y = "Body Mass (g)")
+
+plot_bm_lt
+
+# zone
+plot_db_zone <- ggplot(data =mod_df, aes(x = Zone, y = diet_breadth, fill = Zone)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_paletteer_d("nbapalettes::supersonics_holiday",
+                         limits = c("Urban", "Peri-urban", "Rural"),
+                         guide = guide_legend(title = "Zone")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(x = "Zone",
+       y = "Diet Breadth") 
+
+plot_hb_zone <- ggplot(data =mod_df, aes(x = Zone, y = habitat_breadth, fill = Zone)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_paletteer_d("nbapalettes::supersonics_holiday",
+                         limits = c("Urban", "Peri-urban", "Rural"),
+                         guide = guide_legend(title = "Zone")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(x = "Zone",
+       y = "Habitat Breadth") 
+
+plot_hb_zone
+
+
+plot_bm_zone <- ggplot(data =mod_df, aes(x = Zone, y = Body_mass, fill = Zone)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_paletteer_d("nbapalettes::supersonics_holiday",
+                         limits = c("Urban", "Peri-urban", "Rural"),
+                         guide = guide_legend(title = "Zone")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(x = "Zone",
+       y = "Body Mass (g)") 
+
+plot_mod <- (plot_db_lt / plot_hb_lt / plot_bm_lt / plot_db_zone / plot_hb_zone / plot_bm_zone) + plot_annotation(tag_levels = 'A') + plot_layout(nrow = 3, ncol = 2)
+
+plot_mod
+
+#ggsave("Figures/Figure_5.png", plot_mod, dpi = 800, units = "cm", height = 20)
+
+# publication ready tables
+locality_type_tbl <- tbl_stack(list(mod_db_lt_tbl, mod_hb_lt_tbl, mod_bm_lt_tbl))
+
+locality_type_tbl |> 
+  as_gt() |> 
+  fmt_number(columns = everything(),
+             decimals = 3)
+#  gtsave("Results/locality_type_tbl.docx")
+
+zone_tbl <- tbl_stack(list(mod_db_z_tbl, mod_hb_z_tbl, mod_bm_z_tbl))
+
+zone_tbl|> 
+  as_gt() |> 
+  fmt_number(columns = everything(),
+             decimals = 3) 
+#  gtsave("Results/zone_tbl.docx")
+```

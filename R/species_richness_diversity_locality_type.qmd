@@ -1,0 +1,126 @@
+---
+title: "species_richness_diversity_locality_type"
+format: html
+editor: visual
+---
+
+```{r}
+# Packages for analysis
+library(vegan)
+library(paletteer)
+library(tidyverse)
+library(coin)
+library(patchwork)
+```
+
+```{r}
+# Import data
+dat <- read_csv("Data/Road_Transect_data.csv")
+
+### Species richness ###
+
+ # re-format data for species richness 
+dat_rich <- dat %>% 
+  select(location_route, prefered_name) %>% 
+  mutate(location_route = case_match(
+      location_route,
+      "North Adelaide" ~ "Adelaide",
+      "South Adelaide" ~ "Adelaide",
+      .default = location_route
+    )) %>% 
+  group_by(location_route) %>% 
+  count(prefered_name) %>% 
+  pivot_wider(names_from = prefered_name, values_from = n) %>% 
+  column_to_rownames(var = "location_route") %>% 
+  replace(is.na(.), 0)
+
+#save for later
+#save(dat_rich, file = "Data/species_richness_data.rda")
+
+# dataframe containing info on locality type
+locality_type <- tibble(location = c("Adelaide", "Victor Harbour", "Port Augusta", "Port Lincoln", "Strathalbyn", "Nuriootpa", "Clare", "Tumby Bay"), locality_type = c("City", "City", "City", "City", "Town", "Town", "Town", "Town"))
+
+## urban vs rural localities ##
+
+# function to give species richness
+spec_rich <- specnumber(dat_rich)
+
+# tidy dataframe
+spec_rich_df <- spec_rich %>% 
+  enframe() %>% 
+  full_join(locality_type, by = c("name" = "location")) %>% 
+  rename("location" = "name",
+         "richness" = "value") %>% 
+  mutate(locality_type = fct_relevel(locality_type, "City", "Town"))
+
+#se <- function(x) sqrt(var(x)/length(x))
+
+#spec_rich_df |> 
+#  group_by(locality_type) |> 
+#  summarise(mean = mean(richness),
+#            SE = se(richness))
+
+#save(spec_rich_df, file = "Data/species_richness_mod_data.rda")
+
+# test
+wilcox_test(richness ~ factor(locality_type), data = spec_rich_df, distribution = "exact")
+
+# plot
+plot_richness_locality <- ggplot(data = spec_rich_df, aes(x = locality_type, y = richness, fill = locality_type)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_manual(values = c("#CC6677", "#117733"),
+                    limits = c("City", "Town"),
+                    guide = guide_legend(title = "Locality type")) +
+  theme_bw() +
+  theme(legend.position = "none")+
+  labs(x = "Locality type",
+       y = "Species richness") +
+  ggpubr::stat_compare_means(method = "wilcox.test", label.y = 12, hjust = 0.5)
+
+plot_richness_locality
+
+#ggsave("Figures/Figure_3.png", plot_richness_locality, dpi = 800, units = "cm")
+```
+
+```{r}
+# diversity urban vs rural sites
+
+shannondiv <- diversity(dat_rich)
+
+shandiv_df <- shannondiv %>% 
+  enframe() %>% 
+  rename(location = name,
+         shan_div = value) %>% 
+  mutate(locality_type = c("City", "Town", "Town", "City", "City", "Town", "Town", "City"),
+         locality_type = as.factor(locality_type))
+
+#save(shandiv_df, file = "Data/species_diversity_data_mod.rda")
+
+# no difference in Shannon diversity across urban and rural localities
+coin::wilcox_test(shan_div ~ locality_type, data = shandiv_df, distribution = "exact")
+
+plot_diversity_locality <- ggplot(data = shandiv_df, aes(x = locality_type, y = shan_div, fill = locality_type)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_manual(values = c("#CC6677", "#117733"),
+                    limits = c("City", "Town"),
+                    guide = guide_legend(title = "Locality type")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(x = "Locality type",
+       y = "Shannon diversity") +
+    ggpubr::stat_compare_means(method = "wilcox.test", label.y = 2, hjust = 0.5)
+
+plot_diversity_locality
+
+#ggsave("Figures/Figure_4.png", plot_diversity_locality, dpi = 800, units = "cm")
+```
+
+```{r}
+# plot together
+
+plot_locality_RD <- plot_richness_locality + plot_diversity_locality + plot_annotation(tag_levels = 'A')
+
+ggsave("Figures/RD_joint.png", plot_locality_RD, dpi = 800, units = "cm", height = 18, width = 20)
+```

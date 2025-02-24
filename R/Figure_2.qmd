@@ -1,0 +1,70 @@
+---
+title: "descriptive_stats"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(paletteer)
+
+#Descriptive stats - Where are the birds found?
+
+# Cities
+load("Data/city_zone_richness.rda")
+
+city_descript_df <- city_zone_df %>% 
+  mutate(dist = case_when(
+      dist == "3000" ~ "Urban",
+      dist == "8000" ~ "Peri-urban",
+      dist == "20000" ~ "Rural"),
+      dist = as_factor(dist),
+      prefered_name = as_factor(prefered_name)) %>% 
+  group_by(dist) %>% 
+  count(prefered_name, dist, .drop = F) %>% 
+  ungroup()
+
+# Towns
+load("Data/town_zone_richness.rda")
+
+town_descript_df <- town_zone_df %>%
+  mutate(dist = case_when(
+      dist == "2000" ~ "Urban",
+      dist == "5000" ~ "Peri-urban",
+      dist == "20000" ~ "Rural"),
+      dist = as_factor(dist),
+      prefered_name = as_factor(prefered_name)) %>%
+  group_by(dist) %>% 
+  count(prefered_name, dist, .drop = F) %>% 
+  ungroup() 
+
+#bind together
+descript_df <- bind_rows(city_descript_df, town_descript_df) %>% 
+  dplyr::group_by(dist, prefered_name) %>% 
+  reframe(count = sum(n)) %>% 
+  group_by(prefered_name) %>% 
+  mutate(total = sum(count),
+         prefered_name = case_when(
+         prefered_name == "Osprey" ~ "Eastern Osprey",
+         .default = as.character(prefered_name))) %>% 
+  arrange(desc(total))
+
+CT_plot <-  
+  descript_df %>% 
+  mutate(dist = fct_relevel(dist, "Rural", "Peri-urban", "Urban")) %>% 
+  ggplot(aes(x = fct_rev(fct_reorder(prefered_name, total)), y = count, fill = dist)) +
+  geom_col(position = "dodge") +
+  scale_fill_paletteer_d("nbapalettes::supersonics_holiday",
+                         limits = c("Urban", "Peri-urban", "Rural"),
+                         guide = guide_legend(title = "Zone")) +
+  coord_flip() +
+  scale_x_discrete(limits = rev) +
+  scale_y_continuous(limits = c(0, 90), breaks = c(0, 10, 20, 30, 40, 50, 60, 70, 80, 90)) +
+  theme_bw() +
+  labs(x = "",
+       y = "Number of observations")
+
+CT_plot
+
+ggsave("Figures/Figure_2.png", CT_plot, dpi = 800, units = "cm")
+```

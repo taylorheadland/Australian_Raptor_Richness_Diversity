@@ -1,0 +1,334 @@
+---
+title: "Untitled"
+format: html
+editor: visual
+---
+
+```{r}
+library(vegan)
+library(paletteer)
+library(patchwork)
+library(tidyverse)
+library(sf)
+library(units)
+library(rstatix)
+```
+
+```{r}
+# Species richness urban vs peri-urban vs rural 
+
+## Cities ##
+
+# crs for projected coordinates system
+SA_crs <- 9473
+
+# convert to spatial dataframe
+dat_dist <- read_csv("Data/Road_Transect_data.csv") %>% 
+  select(longitude, latitude, location_route, prefered_name, survey_ID) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>% 
+  st_transform(crs = SA_crs)
+
+# function to create buffers
+st_multibuffer <- function(x, dist_list) {
+
+# Set units for distance list based on units of CRS 
+  dist_list <- dplyr::case_when(stringr::str_detect(sf::st_crs(x)$units, "m") ~ map(dist_list, ~ units::set_units(.x, m)))
+
+# Return a list of buffered sf objects 
+  x_buffered <- purrr::map_dfr(dist_list, ~ sf::st_buffer(x, .x))
+
+# Add list of buffer distances as a column 
+  x_buffered <- tibble::add_column(.data = x_buffered, dist = dist_list)
+
+return(x_buffered) }
+
+# buffer distances
+city_dist_list <- list(3000, 8000, 20000)
+
+# function to place birds into buffer zones
+city_data <- function(city_name){
+
+Locs <- tribble(
+  ~Location, ~latitude, ~longitude, 
+  "Victor Harbour", -35.5557366562707, 138.62317179195787,                 
+  "Port Augusta", -32.4870091426876, 137.7651918570625, 
+  "Port Lincoln", -34.722631749160875, 135.8597253195175)
+
+city_loc <- Locs %>% 
+  filter(Location == city_name) %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326) %>%   
+  st_transform(crs = SA_crs)
+
+city_dat <- dat_dist %>% 
+  filter(location_route == city_name)
+
+buffer <- st_multibuffer(city_loc, city_dist_list) %>% 
+  unnest(dist) %>% 
+  st_intersection()
+
+summary_df <- st_join(city_dat, buffer) %>% 
+  st_drop_geometry() %>% 
+  drop_units() %>% 
+  select(-location_route, -n.overlaps, -origins)
+
+return(summary_df) 
+}
+
+city_names <- c("Victor Harbour", "Port Augusta", "Port Lincoln")
+
+city_zone_df <- map_df(city_names, city_data)
+
+# Manually add in Adelaide birds as concentric circles doesnt quite work for these surveys
+Adelaide_df <- dat_dist |> 
+  filter(location_route %in% c("South Adelaide", "North Adelaide")) |> 
+  select(prefered_name, location_route, survey_ID) |> 
+  st_drop_geometry() |> 
+  arrange(location_route) |> 
+  add_column(dist = as.double(c("3000", "3000", "3000", "3000", "3000", "8000", "8000", "8000", "3000", "20000", "8000", "20000")))%>%
+  mutate(location_route = case_match(
+      location_route,
+      "North Adelaide" ~ "Adelaide",
+      "South Adelaide" ~ "Adelaide",
+      .default = location_route
+    )) |> 
+  rename(Location = location_route)
+
+# add in Adelaide birds
+city_zone_df <- city_zone_df %>% 
+  bind_rows(Adelaide_df)
+
+city_zone_df
+
+#save for descriptive results
+#save(city_zone_df, file = "Data/city_zone_richness.rda")
+
+city_dat_rich <- city_zone_df %>%
+  mutate(dist = case_when(
+      dist == "3000" ~ "Urban",
+      dist == "8000" ~ "Peri-urban",
+      dist == "20000" ~ "Rural"),
+      Location = as.factor(Location),
+      dist = as.factor(dist)) %>% 
+  group_by(Location, prefered_name) %>% 
+  count(dist, .drop = F) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = prefered_name, values_from = n) %>% 
+  replace(is.na(.), 0) 
+
+# save for diversity modelling
+#save(city_dat_rich, file = "Data/city_dat_rich.rda")
+
+city_dat_rich_clean <- city_dat_rich %>% 
+  select(-dist, -Location)
+
+# save for diversity modelling
+#save(city_dat_rich_clean, file = "Data/city_dat_rich_clean.rda")
+
+# function to give species richness
+city_spec_rich <- specnumber(city_dat_rich_clean)
+
+# tidy dataframe
+city_spec_rich_df <- city_spec_rich %>% 
+  enframe() %>% 
+  select(-name) %>% 
+  mutate(zone = city_dat_rich$dist,
+         location = city_dat_rich$Location,
+         locality_type = "City") %>% 
+  rename(richness = value) %>% 
+  mutate(zone = fct_relevel(zone, "Urban","Peri-urban","Rural"))
+
+# test
+kruskal.test(richness ~ zone, data = city_spec_rich_df)
+
+# plot 
+plot_city_richness_zone <- ggplot(data =city_spec_rich_df, aes(x = zone, y = richness, fill = zone)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_paletteer_d("nbapalettes::supersonics_holiday",
+                         limits = c("Urban", "Peri-urban", "Rural"),
+                         guide = guide_legend(title = "Zone")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(x = "Zone",
+       y = "Species richness") +
+    ggpubr::stat_compare_means(method = "kruskal.test", label.y = 10) +
+  facet_wrap(vars(locality_type))
+```
+
+```{r}
+### Rural ###
+
+# buffer distances
+town_dist_list <- list(2000, 5000, 20000)
+
+# function to place birds into buffer zones
+town_data <- function(city_name){
+
+Locs <- tribble(
+  ~Location, ~latitude, ~longitude, 
+  "Strathalbyn", -35.259167548857185, 138.8930048214422,
+  "Nuriootpa", -34.4689951510587, 138.9906894021585, 
+  "Clare", -33.83417175867787, 138.61250553984988, 
+  "Tumby Bay", -34.37507180661518, 136.10053913351203)
+
+town_loc <- Locs %>% 
+  filter(Location == city_name) %>% 
+  st_as_sf(., coords = c("longitude", "latitude"), crs = 4326) %>%   
+  st_transform(crs = SA_crs)
+
+town_dat <- dat_dist %>% 
+  filter(location_route == city_name)
+
+buffer <- st_multibuffer(town_loc, town_dist_list) %>% 
+  unnest(dist) %>% 
+  st_intersection()
+
+summary_df <- st_join(town_dat, buffer) %>% 
+  st_drop_geometry() %>% 
+  drop_units() %>% 
+  select(-location_route, -n.overlaps, -origins)
+
+return(summary_df) 
+}
+
+town_names <- c("Strathalbyn", "Nuriootpa", "Clare", "Tumby Bay")
+
+town_zone_df <- map_df(town_names, town_data)
+
+#save for descriptive results
+#save(town_zone_df, file = "Data/town_zone_richness.rda")
+
+town_dat_rich <- town_zone_df %>%
+  mutate(dist = case_when(
+      dist == "2000" ~ "Urban",
+      dist == "5000" ~ "Peri-urban",
+      dist == "20000" ~ "Rural"),
+      Location = as.factor(Location),
+      dist = as.factor(dist)) %>% 
+  group_by(Location, prefered_name) %>% 
+  count(dist, .drop = F) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = prefered_name, values_from = n) %>% 
+  replace(is.na(.), 0)
+
+#save(town_dat_rich, file = "Data/town_dat_rich.rda")
+
+town_dat_rich_clean <- town_dat_rich %>% 
+  select(-dist, -Location)
+
+# save for later
+#save(town_dat_rich_clean, file = "Data/town_dat_rich_clean.rda")
+
+# species richness function
+town_spec_rich <- specnumber(town_dat_rich_clean)
+
+# tidy dataframe
+town_spec_rich_df <- town_spec_rich %>% 
+  enframe() %>% 
+  select(-name) %>% 
+  mutate(zone = town_dat_rich$dist,
+         location = town_dat_rich$Location,
+         locality_type = "Town") %>% 
+  rename(richness = value) %>% 
+  mutate(zone = fct_relevel(zone, "Urban","Peri-urban","Rural"))
+
+# test
+kruskal.test(richness ~ zone, data = town_spec_rich_df)
+
+#Which groups have differences using dunn test
+pwc <- town_spec_rich_df %>% 
+  dunn_test(richness ~ zone, p.adjust.method = "bonferroni") %>% add_xy_position()
+
+pwc
+
+plot_town_richness_zone <- ggplot(data = town_spec_rich_df, aes(x = zone, y = richness, fill = zone)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_paletteer_d("nbapalettes::supersonics_holiday",
+                         limits = c("Urban", "Peri-urban", "Rural")) +
+  theme_bw() +
+  theme(legend.position = "none")+
+  labs(x = "Zone",
+       y = "Species richness") +
+    ggpubr::stat_pvalue_manual(pwc, label = "p.adj.signif", hide.ns = FALSE, inherit.aes = FALSE, size = 3, step.increase = 0.05) +
+    ggpubr::stat_compare_means(method = "kruskal.test", label.y = 15)+
+  facet_wrap(vars(locality_type))
+```
+
+```{r}
+# function to run Shannon diversity index
+city_diversity_gradient <- diversity(city_dat_rich_clean)
+
+# tidy dataframe
+city_diversity_gradient_df <- city_diversity_gradient %>% 
+  enframe() %>% 
+  select(-name) %>% 
+  mutate(zone = city_dat_rich$dist,
+         location = city_dat_rich$Location,
+         locality_type = "City") %>% 
+  rename(shan_div = value) %>% 
+  mutate(zone = fct_relevel(zone, "Urban", "Peri-urban", "Rural"))
+
+# test
+kruskal.test(shan_div ~ zone, data = city_diversity_gradient_df)
+
+# plot
+plot_city_gradient_div <- ggplot(data = city_diversity_gradient_df, aes(x = zone, y = shan_div, fill = zone)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_paletteer_d("nbapalettes::supersonics_holiday",
+                         limits = c("Urban", "Peri-urban", "Rural")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(x = "Zone",
+       y = "Shannon diversity") +
+    ggpubr::stat_compare_means(method = "kruskal.test", label.y = 3) +
+  facet_wrap(vars(locality_type))
+
+plot_city_gradient_div
+
+```
+
+```{r}
+town_diversity_gradient <- diversity(town_dat_rich_clean)
+
+town_diversity_gradient_df <- town_diversity_gradient %>% 
+  enframe() %>% 
+  select(-name) %>% 
+  mutate(zone = town_dat_rich$dist,
+         location = town_dat_rich$Location,
+         locality_type = "Town") %>% 
+  rename(shan_div = value) %>% 
+  mutate(zone = fct_relevel(zone, "Urban", "Peri-urban", "Rural"))
+
+kruskal.test(shan_div ~ zone, data = town_diversity_gradient_df)
+
+# pairwise comparison
+pwc <- town_diversity_gradient_df %>% 
+  dunn_test(shan_div ~ zone, p.adjust.method = "bonferroni") %>% add_xy_position()
+
+pwc
+
+# plot
+plot_town_gradient_div <- ggplot(data = town_diversity_gradient_df, aes(x = zone, y = shan_div, fill = zone)) +
+  geom_violin(trim = F) +
+  geom_boxplot(width=0.1, color="black", alpha=0.2) +
+  scale_fill_paletteer_d("nbapalettes::supersonics_holiday",
+                         limits = c("Urban", "Peri-urban", "Rural")) +
+  theme_bw() +
+  theme(legend.position = "none") +
+  labs(x = "Zone",
+       y = "Shannon diversity") +
+    ggpubr::stat_pvalue_manual(pwc, label = "p.adj.signif", hide.ns = FALSE, inherit.aes = F, size = 3, step.increase = 0.05, y.position = c(2, 2.2, 2.4)) +
+    ggpubr::stat_compare_means(method = "kruskal.test", label.y = 3) +
+  facet_wrap(vars(locality_type))
+
+```
+
+```{r}
+# Plot together
+
+plot_zone_RD <- (plot_city_richness_zone + plot_town_richness_zone) / (plot_city_gradient_div + plot_town_gradient_div) + plot_annotation(tag_levels = 'A')
+
+#ggsave("Figures/Figure_4.png", plot_zone_RD, dpi = 800, units = "cm", height = 22, width = 20)
+```

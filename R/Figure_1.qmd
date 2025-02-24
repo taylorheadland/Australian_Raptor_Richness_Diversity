@@ -1,0 +1,66 @@
+---
+title: "Figure_1"
+format: html
+editor: visual
+---
+
+```{r}
+library(ozmaps)
+library(ggrepel)
+library(ggspatial)
+library(terra)
+library(scales)
+library(sf)
+library(paletteer)
+
+PopDensity <- rast("Data/Global_2020_PopDensity.tiff")
+
+SA <- ozmaps::ozmap_states |>
+  filter(NAME == "South Australia") |>
+  st_transform(crs = st_crs(4326))
+
+PopDensity_crop <- terra::crop(PopDensity, SA, mask = T)
+
+Localities <- tribble(
+  ~Location, ~latitude, ~longitude, ~locality_type, 
+  "Victor Harbour", -35.5557366562707, 138.62317179195787, "City",                 
+  "Port Augusta", -32.4870091426876, 137.7651918570625, "City",
+  "Port Lincoln", -34.722631749160875, 135.8597253195175, "City",
+  "Strathalbyn", -35.259167548857185, 138.8930048214422, "Town",
+  "Nuriootpa", -34.4689951510587, 138.9906894021585, "Town",
+  "Clare", -33.83417175867787, 138.61250553984988, "Town",
+  "Tumby Bay", -34.37507180661518, 136.10053913351203, "Town",
+  "Adelaide", -34.92914408575173, 138.59987864683796, "City") %>% 
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+Localities_City <- Localities %>% 
+  dplyr::filter(locality_type == "City")
+
+Localities_Town <- Localities %>% 
+  dplyr::filter(locality_type == "Town")
+
+Study_area <- ggplot() +
+  geom_sf(data = SA, fill = "white") +
+  tidyterra::geom_spatraster(data = PopDensity_crop, maxcell = Inf) +
+  scale_fill_paletteer_c("ggthemes::Classic Area Red", na.value = "transparent", trans = "log10", labels = label_number(drop0trailing = TRUE)) +
+  geom_sf(data = Localities_City, size = 2.5) +
+  geom_sf(data = Localities_Town, shape = 17, size = 2.5) +
+  coord_sf(expand = F, xlim = c(134, 140), ylim = c(-32, -37)) +
+  geom_text_repel(data = Localities, aes(label = Location, geometry = geometry),
+    stat = "sf_coordinates") +
+  labs(x = "",
+       y = "") +
+  guides(fill=guide_colourbar(title="Human population density\nper square kilometre")) +
+  theme_bw() +
+  theme(panel.background = element_rect(fill = 'lightblue'),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        ,
+        legend.background = element_blank(),
+        legend.box.background = element_rect(colour = "black"))+
+  annotation_north_arrow(style = north_arrow_nautical(), pad_x = unit(-0.05, "cm")) +
+  annotation_scale(pad_x = unit(2, "cm"), pad_y = unit(0.7, "cm"))
+
+
+ggsave("Figures/Figure_1.png", Study_area, dpi = 800, units = "cm")
+```
