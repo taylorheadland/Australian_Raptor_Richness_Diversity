@@ -1,0 +1,1 @@
+This repository contains the files and code necessary to reproduce work pertaining to the richness and diversity of raptors across localities in South Australia. Figure 1 can be reproduced by downloading the 'Gridded population of the world (v4)' dataset and cropping it to the extent of South Australia. 
